@@ -44,9 +44,12 @@ import takagi.ru.monica.keepass.KeePassPendingChangeDao
         MdbxRemoteSource::class,
         MdbxSyncStateEntity::class,
         // KeePass entry-level pending changes
-        KeePassPendingChange::class
+        KeePassPendingChange::class,
+        // Monica Cloud sync bookkeeping
+        takagi.ru.monica.cloud.data.MonicaCloudLinkEntity::class,
+        takagi.ru.monica.cloud.data.MonicaCloudPayloadExtraEntity::class
     ],
-    version = 77,
+    version = 78,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -83,6 +86,9 @@ abstract class PasswordDatabase : RoomDatabase() {
 
     // Attachment DAO（跨来源统一附件元数据）
     abstract fun attachmentDao(): AttachmentDao
+
+    // Monica Cloud
+    abstract fun monicaCloudDao(): takagi.ru.monica.cloud.data.MonicaCloudDao
     
     companion object {
         @Volatile
@@ -2337,6 +2343,26 @@ abstract class PasswordDatabase : RoomDatabase() {
             }
         }
 
+        /** Monica Cloud: item/folder links and preserved foreign payload keys. */
+        internal val MIGRATION_77_78 = object : androidx.room.migration.Migration(77, 78) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `monica_cloud_links` (" +
+                        "`cloud_id` TEXT NOT NULL, `object_type` TEXT NOT NULL, `local_kind` TEXT, " +
+                        "`local_id` TEXT NOT NULL, `revision` TEXT NOT NULL, `content_hash` TEXT NOT NULL, " +
+                        "`trashed` INTEGER NOT NULL, `encrypted_item_key` TEXT, PRIMARY KEY(`cloud_id`))"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_monica_cloud_links_local` " +
+                        "ON `monica_cloud_links` (`local_kind`, `local_id`)"
+                )
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `monica_cloud_payload_extras` (" +
+                        "`local_key` TEXT NOT NULL, `extras` TEXT NOT NULL, PRIMARY KEY(`local_key`))"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): PasswordDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -2420,7 +2446,8 @@ abstract class PasswordDatabase : RoomDatabase() {
                         MIGRATION_73_74,   // Per-database MDBX engine selection
                         MIGRATION_74_75,   // MDBX2 durable remote sync cursors
                         MIGRATION_75_76,   // MDBX2 external SAF tree metadata
-                        MIGRATION_76_77    // Attachments for PasswordEntry and SecureItem
+                        MIGRATION_76_77,   // Attachments for PasswordEntry and SecureItem
+                        MIGRATION_77_78    // Monica Cloud sync links
                     )
                     // 启用多进程失效通知：IME 跑在 :ime 独立进程，主进程需要
                     // 感知 IME 进程对数据库的修改（例如最近填充时间戳等）。

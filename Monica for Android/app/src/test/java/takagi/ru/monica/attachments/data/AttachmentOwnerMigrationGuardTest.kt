@@ -17,7 +17,7 @@ class AttachmentOwnerMigrationGuardTest {
         assertTrue(model.contains("parentSecureItemId"))
         assertTrue(model.contains("entity = SecureItem::class"))
         assertTrue(model.contains("AttachmentOwner"))
-        assertTrue(database.contains("version = 77"))
+        assertTrue(database.contains("version = 78"))
         assertTrue(database.contains("MIGRATION_76_77"))
         assertTrue(database.contains("parent_secure_item_id"))
         assertTrue(database.contains("REFERENCES secure_items(id) ON DELETE CASCADE"))

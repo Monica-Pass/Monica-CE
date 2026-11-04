@@ -226,5 +226,6 @@ sealed class Screen(val route: String) {
     // Bitwarden 集成相关路由
     object BitwardenLogin : Screen("bitwarden_login")  // Bitwarden 登录页面
     object BitwardenSettings : Screen("bitwarden_settings")  // Bitwarden 设置/管理页面
+    object MonicaCloud : Screen("monica_cloud")  // Monica Cloud 自托管同步
     object SyncQueue : Screen("sync_queue")  // 同步队列管理页面
 }

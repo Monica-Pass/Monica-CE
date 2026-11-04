@@ -71,7 +71,7 @@ class SteamBoundaryGuardTest {
     fun steamDoesNotChangeMainPasswordDatabaseSchema() {
         val source = projectFile("app/src/main/java/takagi/ru/monica/data/PasswordDatabase.kt").readText()
 
-        assertTrue(source.contains("version = 77"))
+        assertTrue(source.contains("version = 78"))
         assertFalse(source.contains("SteamAccountEntity::class"))
         assertFalse(source.contains("abstract fun steamAccountDao"))
     }
