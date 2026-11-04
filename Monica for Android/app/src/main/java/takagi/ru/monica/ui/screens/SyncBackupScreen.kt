@@ -34,6 +34,7 @@ fun SyncBackupScreen(
     onNavigateToLocalKeePass: () -> Unit = {},  // 本地 KeePass 数据库管理
     onNavigateToMdbx: () -> Unit = {},
     onNavigateToBitwarden: () -> Unit = {},  // Bitwarden 集成入口
+    onNavigateToMonicaCloud: () -> Unit = {},  // Monica Cloud 自托管同步
     isPlusActivated: Boolean = false
 ) {
     val scrollState = rememberScrollState()
@@ -113,6 +114,20 @@ fun SyncBackupScreen(
             
             // 常用同步区块（高频）
             SyncBackupSection(title = stringResource(R.string.sync_backup_common_sync)) {
+                SyncBackupItem(
+                    icon = Icons.Default.CloudSync,
+                    title = stringResource(R.string.monica_cloud_title),
+                    description = stringResource(R.string.monica_cloud_entry_desc),
+                    onClick = onNavigateToMonicaCloud,
+                    enabled = true,
+                    badge = null
+                )
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 72.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+
                 SyncBackupItem(
                     icon = Icons.Default.Cloud,
                     title = stringResource(R.string.webdav_backup),

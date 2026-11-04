@@ -58,6 +58,13 @@ class MonicaApplication : Application() {
         WebDavBackoffState.attachPersistence(this)
         scheduleKeePassRemoteUploadRecovery()
         scheduleAttachmentHousekeeping()
+        startMonicaCloudSync()
+    }
+
+    /** Monica Cloud: periodic + on-change sync when an account is signed in. */
+    private fun startMonicaCloudSync() {
+        runCatching { takagi.ru.monica.cloud.MonicaCloudManager.get(this).onAppStart() }
+            .onFailure { error -> Log.w(TAG, "Failed to start Monica Cloud sync", error) }
     }
     
     /**

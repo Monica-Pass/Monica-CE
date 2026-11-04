@@ -3720,6 +3720,9 @@ fun MonicaContent(
                 onNavigateToBitwarden = {
                     navController.navigate(Screen.BitwardenSettings.route)
                 },
+                onNavigateToMonicaCloud = {
+                    navController.navigate(Screen.MonicaCloud.route)
+                },
                 isPlusActivated = settingsViewModel.settings.collectAsState().value.isPlusActivated
             )
             }
@@ -3950,6 +3953,19 @@ fun MonicaContent(
             )
         }
         
+        // Monica Cloud 自托管同步
+        composable(
+            route = Screen.MonicaCloud.route,
+            enterTransition = { easyNotesScreenEnter() },
+            exitTransition = { easyNotesScreenExit() },
+            popEnterTransition = { easyNotesScreenEnter() },
+            popExitTransition = { easyNotesScreenExit() }
+        ) {
+            takagi.ru.monica.cloud.ui.MonicaCloudScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
         // Bitwarden 设置/管理页面
         composable(
             route = Screen.BitwardenSettings.route,
