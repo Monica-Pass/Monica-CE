@@ -17,6 +17,7 @@ import takagi.ru.monica.cloud.api.DeviceDto
 import takagi.ru.monica.cloud.api.MonicaCloudClient
 import takagi.ru.monica.cloud.sync.CloudLink
 import takagi.ru.monica.cloud.sync.IncomingRecord
+import takagi.ru.monica.cloud.sync.LocalAttachment
 import takagi.ru.monica.cloud.sync.LocalFolder
 import takagi.ru.monica.cloud.sync.LocalKind
 import takagi.ru.monica.cloud.sync.LocalRecord
@@ -46,6 +47,7 @@ class MonicaCloudSyncEngineTest {
     /** One phone: an in-memory vault plus its own sync bookkeeping. */
     private inner class Device(name: String) {
         val records = linkedMapOf<String, LocalRecord>()
+        val files = linkedMapOf<String, Pair<LocalAttachment, ByteArray>>()
         val folders = linkedMapOf<String, LocalFolder>()
         private val linkMap = linkedMapOf<String, CloudLink>()
         private var nextId = 1
@@ -77,7 +79,27 @@ class MonicaCloudSyncEngineTest {
             override suspend fun renameFolder(id: String, name: String) {
                 folders[id] = LocalFolder(id, name)
             }
+
+            override suspend fun listAttachments() =
+                files.values.map { it.first }.filter { it.owner.key in records }
+
+            override suspend fun readAttachment(id: String) = files.getValue(id).second
+
+            override suspend fun createAttachment(owner: LocalRef, fileName: String, content: ByteArray): LocalAttachment =
+                LocalAttachment("a${nextId++}", owner, fileName, content.size.toLong()).also { files[it.id] = it to content }
+
+            override suspend fun deleteAttachment(id: String) {
+                files.remove(id)
+            }
         }
+
+        fun attach(entry: String, fileName: String, content: String) = runBlocking {
+            store.createAttachment(byName(entry)!!.ref, fileName, content.toByteArray())
+        }
+
+        fun filesOf(entry: String) = files.values
+            .filter { it.first.owner == byName(entry)?.ref }
+            .associate { it.first.fileName to String(it.second) }
 
         val links = object : MonicaCloudLinkStore {
             override suspend fun all() = linkMap.values.toList()
@@ -187,6 +209,41 @@ class MonicaCloudSyncEngineTest {
         a.sync()
         b.sync()
         assertEquals("Dev", b.folderOf("GitHub"))
+    }
+
+    @Test
+    fun attachmentsSyncBothWays() {
+        val a = Device("A")
+        val b = Device("B")
+        a.add("GitHub")
+        a.attach("GitHub", "codes.txt", "abcd-1234")
+        val first = a.sync()
+        assertEquals(1, first.pushedAttachments)
+
+        // Downloaded and stored on the other device.
+        assertEquals(1, b.sync().pulledAttachments)
+        assertEquals(mapOf("codes.txt" to "abcd-1234"), b.filesOf("GitHub"))
+
+        // Nothing moves when nothing changed (uploads must not look like remote edits).
+        val idle = a.sync()
+        assertEquals(0, idle.pulledUpdated + idle.pulledAttachments + idle.pushedAttachments)
+
+        // Added on B, deleted on B → mirrored on A.
+        b.attach("GitHub", "photo.jpg", "jpeg-bytes")
+        b.sync()
+        a.sync()
+        assertEquals(setOf("codes.txt", "photo.jpg"), a.filesOf("GitHub").keys)
+        b.files.entries.removeIf { it.value.first.fileName == "codes.txt" }
+        assertEquals(1, b.sync().pushedAttachments)
+        a.sync()
+        assertEquals(setOf("photo.jpg"), a.filesOf("GitHub").keys)
+
+        // Trashing the entry keeps its attachments on the server.
+        a.edit("GitHub") { it.copy(trashed = true) }
+        a.sync()
+        b.sync()
+        assertTrue(b.byName("GitHub")!!.trashed)
+        assertEquals(setOf("photo.jpg"), b.filesOf("GitHub").keys)
     }
 
     @Test
