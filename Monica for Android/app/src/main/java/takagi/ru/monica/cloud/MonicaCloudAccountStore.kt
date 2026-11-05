@@ -29,6 +29,11 @@ data class MonicaCloudAccount(
     val lastConflicts: Int = 0,
     /** Items currently linked to the server. */
     val syncedItems: Int = 0,
+    /**
+     * Set after the first sync with attachment support. Accounts linked by an older build run one
+     * full sync so attachments of entries that have not changed since are downloaded too.
+     */
+    val attachmentsSynced: Boolean = false,
 )
 
 class MonicaCloudAccountStore(private val securityManager: SecurityManager) {

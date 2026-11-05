@@ -82,7 +82,7 @@ class MonicaCloudInteropTest {
 
         // Attachment round trip through the chunked format.
         val content = MonicaCloudCrypto.randomBytes(150_000)
-        val withFile = client.uploadAttachment(created.id, itemKey, "recovery.txt", content)
+        val withFile = client.uploadAttachment(created.id, itemKey, "recovery.txt", content).item
         val out = ByteArrayOutputStream()
         val name = client.downloadAttachment(created.id, itemKey, withFile.attachments.single(), out)
         assertEquals("recovery.txt", name)

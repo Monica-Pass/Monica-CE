@@ -209,7 +209,123 @@ class MonicaCloudSyncEngine(
             result = result.copy(pushedDeleted = result.pushedDeleted + 1)
         }
 
+        result = syncAttachments(userKey, remote.items, liveKeys, result)
         return result.copy(cursor = remote.revisionDate)
+    }
+
+    // ------------------------------------------------------------------ attachments
+
+    /**
+     * Reconcile attachments after items are linked.
+     * - Items in this pull: download server attachments we do not have, drop ones deleted on the server.
+     * - Local attachments without a link are uploaded; linked ones that disappeared locally while their
+     *   entry still exists are deleted on the server. Attachments of entries in the trash still exist
+     *   locally (soft-deleted), so trashing an entry never deletes its server attachments.
+     * Uploads bump the item's server revision; the item link is updated so that is not seen as a remote edit.
+     */
+    private suspend fun syncAttachments(
+        userKey: ByteArray,
+        remoteItems: List<ItemDto>,
+        liveLocalKeys: Set<String>,
+        start: MonicaCloudSyncResult,
+    ): MonicaCloudSyncResult {
+        var result = start
+        val all = links.all()
+        val itemByCloud = all.filter { it.objectType == CloudLink.ITEM }.associateBy { it.cloudId }.toMutableMap()
+        val itemByLocal = itemByCloud.values.filter { it.localRef != null }.associateBy { it.localRef!!.key }
+        val attachmentLinks = all.filter { it.objectType == CloudLink.ATTACHMENT }.associateBy { it.cloudId }.toMutableMap()
+        val local = store.listAttachments()
+        val localById = local.associateBy { it.id }
+
+        suspend fun linkAttachment(cloudId: String, owner: LocalRef, localId: String, parentCloudId: String) {
+            val link = CloudLink(cloudId, CloudLink.ATTACHMENT, owner.kind, localId, parentCloudId, owner.key)
+            links.upsert(link)
+            attachmentLinks[cloudId] = link
+        }
+
+        suspend fun bumpItem(parentCloudId: String, revision: String) {
+            val link = itemByCloud[parentCloudId] ?: return
+            val updated = link.copy(revision = revision)
+            links.upsert(updated)
+            itemByCloud[parentCloudId] = updated
+        }
+
+        // Server → device.
+        for (dto in remoteItems) {
+            val owner = itemByCloud[dto.id]?.localRef ?: continue
+            if (owner.kind == LocalKind.PASSKEY || owner.key !in liveLocalKeys) continue
+            val remoteIds = dto.attachments.map { it.id }.toSet()
+            for (gone in attachmentLinks.values.filter { it.revision == dto.id && it.cloudId !in remoteIds }) {
+                if (gone.localId in localById) store.deleteAttachment(gone.localId)
+                links.delete(gone.cloudId)
+                attachmentLinks.remove(gone.cloudId)
+            }
+            var itemKey: ByteArray? = null
+            try {
+                for (attachment in dto.attachments) {
+                    val existing = attachmentLinks[attachment.id]
+                    // Same owner: either present, or deleted here on purpose (pushed below). Only a link to a
+                    // different (recreated) entry means the local copy is gone and must be downloaded again.
+                    if (existing != null && existing.contentHash == owner.key) continue
+                    if (existing != null) {
+                        links.delete(existing.cloudId)
+                        attachmentLinks.remove(existing.cloudId)
+                    }
+                    val key = itemKey ?: MonicaCloudCrypto.decryptItemKey(userKey, dto.key).also { itemKey = it }
+                    val buffer = java.io.ByteArrayOutputStream()
+                    val fileName = client.downloadAttachment(dto.id, key, attachment, buffer)
+                    val stored = store.createAttachment(owner, fileName, buffer.toByteArray()) ?: continue
+                    linkAttachment(attachment.id, owner, stored.id, dto.id)
+                    result = result.copy(pulledAttachments = result.pulledAttachments + 1)
+                }
+            } finally {
+                itemKey?.fill(0)
+            }
+        }
+
+        // Re-read: the server pass may have added or removed local attachments.
+        val current = store.listAttachments()
+        val currentById = current.associateBy { it.id }
+
+        // Device → server: new local attachments.
+        val linkedLocalIds = attachmentLinks.values.map { it.localId }.toSet()
+        for (attachment in current) {
+            if (attachment.id in linkedLocalIds) continue
+            val parent = itemByLocal[attachment.owner.key] ?: continue
+            val parentCloudId = parent.cloudId
+            val encryptedKey = itemByCloud[parentCloudId]?.encryptedItemKey ?: continue
+            val itemKey = MonicaCloudCrypto.decryptItemKey(userKey, encryptedKey)
+            try {
+                val uploaded = client.uploadAttachment(parentCloudId, itemKey, attachment.fileName, store.readAttachment(attachment.id))
+                linkAttachment(uploaded.attachmentId, attachment.owner, attachment.id, parentCloudId)
+                bumpItem(parentCloudId, uploaded.item.revisionDate)
+                result = result.copy(pushedAttachments = result.pushedAttachments + 1)
+            } catch (e: MonicaCloudApiException) {
+                if (e.status != 404) throw e // item deleted on the server meanwhile
+            } finally {
+                itemKey.fill(0)
+            }
+        }
+
+        // Device → server: attachments removed locally.
+        for (link in attachmentLinks.values.toList()) {
+            if (link.localId in currentById) continue
+            val parent = itemByCloud[link.revision]
+            val ownerStillHere = link.contentHash in liveLocalKeys && parent?.localRef?.key == link.contentHash
+            if (ownerStillHere) {
+                try {
+                    val item = client.deleteAttachment(link.revision, link.cloudId)
+                    bumpItem(link.revision, item.revisionDate)
+                    result = result.copy(pushedAttachments = result.pushedAttachments + 1)
+                } catch (e: MonicaCloudApiException) {
+                    if (e.status != 404) throw e
+                }
+            }
+            // Otherwise the whole entry went away (or was recreated); the item sync handled it.
+            links.delete(link.cloudId)
+            attachmentLinks.remove(link.cloudId)
+        }
+        return result
     }
 
     // ------------------------------------------------------------------ items

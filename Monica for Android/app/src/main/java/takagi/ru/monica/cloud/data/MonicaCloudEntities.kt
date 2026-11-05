@@ -110,4 +110,8 @@ interface MonicaCloudDao {
 
     @Insert
     suspend fun insertPasskey(entry: PasskeyEntry): Long
+
+    /** Locally stored attachments (decryptable blobs), including soft-deleted ones of trashed entries. */
+    @Query("SELECT * FROM attachments WHERE source = 'LOCAL' AND local_path IS NOT NULL AND wrapped_cek IS NOT NULL")
+    suspend fun localAttachments(): List<takagi.ru.monica.attachments.model.Attachment>
 }

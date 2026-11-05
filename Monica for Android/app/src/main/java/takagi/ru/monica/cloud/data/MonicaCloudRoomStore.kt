@@ -10,7 +10,13 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import takagi.ru.monica.attachments.model.Attachment
+import takagi.ru.monica.attachments.model.AttachmentDownloadState
+import takagi.ru.monica.attachments.model.AttachmentSource
+import takagi.ru.monica.attachments.storage.AttachmentKeyVault
+import takagi.ru.monica.attachments.storage.AttachmentStorage
 import takagi.ru.monica.cloud.mapper.MonicaCloudEntityMapper
+import takagi.ru.monica.cloud.sync.LocalAttachment
 import takagi.ru.monica.cloud.sync.CloudLink
 import takagi.ru.monica.cloud.sync.IncomingRecord
 import takagi.ru.monica.cloud.sync.LocalFolder
@@ -51,6 +57,9 @@ class MonicaCloudRoomStore(
     private val passkeyDao = database.passkeyDao()
     private val customFieldDao = database.customFieldDao()
     private val categoryDao = database.categoryDao()
+    private val attachmentDao = database.attachmentDao()
+    private val attachmentStorage = AttachmentStorage(context)
+    private val attachmentKeys = AttachmentKeyVault(securityManager)
     private val mapper = MonicaCloudEntityMapper
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -259,6 +268,86 @@ class MonicaCloudRoomStore(
             dao.upsertExtra(MonicaCloudPayloadExtraEntity(ref.key, encoded.toString()))
         }
         return mapOf(ref.key to extra)
+    }
+
+    // ------------------------------------------------------------------ attachments
+    // Files are kept exactly like attachments added in the editor: encrypted under a fresh CEK in
+    // filesDir/secure_attachments, the CEK wrapped by AttachmentKeyVault, source = LOCAL.
+
+    override suspend fun listAttachments(): List<LocalAttachment> = withContext(Dispatchers.IO) {
+        val passwords = dao.localPasswords().map { it.id }.toHashSet()
+        val secureItems = dao.localSecureItems().filter { mapper.secureType(it.itemType) != null }.map { it.id }.toHashSet()
+        dao.localAttachments().mapNotNull { attachment ->
+            val owner = when {
+                attachment.parentPasswordId in passwords -> LocalRef(LocalKind.PASSWORD, attachment.parentPasswordId.toString())
+                attachment.parentSecureItemId in secureItems -> LocalRef(LocalKind.SECURE_ITEM, attachment.parentSecureItemId.toString())
+                else -> null
+            } ?: return@mapNotNull null
+            LocalAttachment(attachment.id.toString(), owner, attachment.fileName, attachment.sizeBytes)
+        }
+    }
+
+    override suspend fun readAttachment(id: String): ByteArray = withContext(Dispatchers.IO) {
+        val attachment = id.toLongOrNull()?.let { attachmentDao.getById(it) } ?: error("attachment $id not found")
+        val cek = attachmentKeys.unwrap(requireNotNull(attachment.wrappedCek))
+        try {
+            attachmentStorage.openDecryptedStream(requireNotNull(attachment.localPath), cek).use { it.readBytes() }
+        } finally {
+            cek.fill(0)
+        }
+    }
+
+    override suspend fun createAttachment(owner: LocalRef, fileName: String, content: ByteArray): LocalAttachment? =
+        withContext(Dispatchers.IO) {
+            val ownerId = owner.id.toLongOrNull() ?: return@withContext null
+            val ownerTrashed = when (owner.kind) {
+                LocalKind.PASSWORD -> passwordDao.getPasswordEntryById(ownerId)?.isDeleted ?: return@withContext null
+                LocalKind.SECURE_ITEM -> secureDao.getItemById(ownerId)?.isDeleted ?: return@withContext null
+                LocalKind.PASSKEY -> return@withContext null
+            }
+            val blob = attachmentStorage.writeEncrypted(content.inputStream())
+            val wrapped = try {
+                attachmentKeys.wrap(blob.cek)
+            } catch (e: Throwable) {
+                attachmentStorage.delete(blob.relativePath)
+                throw e
+            } finally {
+                blob.cek.fill(0)
+            }
+            val now = System.currentTimeMillis()
+            val id = attachmentDao.insert(
+                Attachment(
+                    parentPasswordId = ownerId.takeIf { owner.kind == LocalKind.PASSWORD },
+                    parentSecureItemId = ownerId.takeIf { owner.kind == LocalKind.SECURE_ITEM },
+                    source = AttachmentSource.LOCAL.name,
+                    fileName = fileName,
+                    mimeType = mimeTypeOf(fileName),
+                    sizeBytes = blob.sizeBytes,
+                    sha256Hex = blob.sha256Hex,
+                    wrappedCek = wrapped,
+                    localPath = blob.relativePath,
+                    downloadState = AttachmentDownloadState.DOWNLOADED.name,
+                    createdAt = now,
+                    updatedAt = now,
+                    // Attachments of a trashed entry are soft-deleted with it, as the editor does.
+                    isDeleted = ownerTrashed,
+                    deletedAt = if (ownerTrashed) now else null,
+                ),
+            )
+            LocalAttachment(id.toString(), owner, fileName, blob.sizeBytes)
+        }
+
+    override suspend fun deleteAttachment(id: String) = withContext(Dispatchers.IO) {
+        val attachment = id.toLongOrNull()?.let { attachmentDao.getById(it) } ?: return@withContext
+        attachment.localPath?.let { attachmentStorage.delete(it) }
+        attachmentDao.deleteById(attachment.id)
+        Unit
+    }
+
+    private fun mimeTypeOf(fileName: String): String {
+        val ext = fileName.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+        return ext.takeIf { it.isNotBlank() }?.let { android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+            ?: "application/octet-stream"
     }
 
     // ------------------------------------------------------------------ folders

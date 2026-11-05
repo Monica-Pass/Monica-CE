@@ -150,7 +150,7 @@ class MonicaCloudManager private constructor(private val context: Context) {
                     store = MonicaCloudRoomStore(context, database, securityManager),
                     links = MonicaCloudRoomLinkStore(database.monicaCloudDao()),
                     conflictSuffix = context.getString(takagi.ru.monica.R.string.monica_cloud_conflict_suffix),
-                ).sync(userKey, account.accountId, account.cursor, allowEmptyRemote)
+                ).sync(userKey, account.accountId, account.cursor.takeIf { account.attachmentsSynced }, allowEmptyRemote)
             }
         }
         userKey.fill(0)
@@ -162,10 +162,11 @@ class MonicaCloudManager private constructor(private val context: Context) {
                     cursor = result.cursor,
                     lastSyncAt = System.currentTimeMillis(),
                     lastError = null,
-                    lastPulled = result.pulledCreated + result.pulledUpdated + result.pulledDeleted,
-                    lastPushed = result.pushedCreated + result.pushedUpdated + result.pushedDeleted,
+                    lastPulled = result.pulledCreated + result.pulledUpdated + result.pulledDeleted + result.pulledAttachments,
+                    lastPushed = result.pushedCreated + result.pushedUpdated + result.pushedDeleted + result.pushedAttachments,
                     lastConflicts = result.conflicts,
                     syncedItems = database.monicaCloudDao().linkedItemCount(),
+                    attachmentsSynced = true,
                 ),
             )
             _state.value = stateFrom(accounts.load())

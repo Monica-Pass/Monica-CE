@@ -81,6 +81,9 @@ data class IncomingRecord(
 
 data class LocalFolder(val id: String, val name: String)
 
+/** A file attached to a Monica-local entry. Contents are read through the store on demand. */
+data class LocalAttachment(val id: String, val owner: LocalRef, val fileName: String, val sizeBytes: Long)
+
 /**
  * Local persistence the engine syncs against. The Android implementation maps Room entities
  * (PasswordEntry / SecureItem / PasskeyEntry / Category); tests use an in-memory map.
@@ -108,6 +111,19 @@ interface MonicaCloudLocalStore {
     suspend fun createFolder(name: String): LocalFolder
 
     suspend fun renameFolder(id: String, name: String)
+
+    // Attachments. Stores that cannot hold files keep these defaults and attachments are skipped.
+
+    /** Attachments of Monica-local entries, including those of entries in the trash. */
+    suspend fun listAttachments(): List<LocalAttachment> = emptyList()
+
+    /** Decrypted contents of a local attachment. */
+    suspend fun readAttachment(id: String): ByteArray = throw UnsupportedOperationException("attachments not supported")
+
+    /** Store a file downloaded from the server under [owner]; null if the owner cannot hold attachments. */
+    suspend fun createAttachment(owner: LocalRef, fileName: String, content: ByteArray): LocalAttachment? = null
+
+    suspend fun deleteAttachment(id: String) = Unit
 }
 
 /** Sync bookkeeping: which local object corresponds to which server object, as of the last sync. */
@@ -130,6 +146,12 @@ data class CloudLink(
     companion object {
         const val ITEM = "item"
         const val FOLDER = "folder"
+
+        /**
+         * Attachment links reuse the columns: [localId] is the local attachment id, [revision] holds
+         * the parent item's cloud id and [contentHash] the owner's [LocalRef.key].
+         */
+        const val ATTACHMENT = "attachment"
     }
 }
 
@@ -153,6 +175,8 @@ data class MonicaCloudSyncResult(
     val pushedDeleted: Int = 0,
     val conflicts: Int = 0,
     val skippedUnsupported: Int = 0,
+    val pulledAttachments: Int = 0,
+    val pushedAttachments: Int = 0,
 )
 
 sealed class MonicaCloudSyncException(message: String) : Exception(message) {

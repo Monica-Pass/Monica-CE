@@ -168,8 +168,10 @@ class MonicaCloudClient(
         call { api.deleteFolder(id) }
     }
 
+    class UploadedAttachment(val attachmentId: String, val item: ItemDto)
+
     /** Encrypt and upload an attachment. [itemKey] is the item's decrypted key. */
-    suspend fun uploadAttachment(itemId: String, itemKey: ByteArray, fileName: String, content: ByteArray): ItemDto {
+    suspend fun uploadAttachment(itemId: String, itemKey: ByteArray, fileName: String, content: ByteArray): UploadedAttachment {
         val (register, sealed) = withContext(Dispatchers.Default) {
             val attachmentKey = MonicaCloudCrypto.generateKey()
             try {
@@ -185,7 +187,7 @@ class MonicaCloudClient(
         }
         val registered = call { api.registerAttachment(itemId, register) }
         val body = sealed.toRequestBody("application/octet-stream".toMediaType())
-        return call { api.uploadAttachment(itemId, registered.id, body) }
+        return UploadedAttachment(registered.id, call { api.uploadAttachment(itemId, registered.id, body) })
     }
 
     /** Download and decrypt an attachment into [output]. Returns the decrypted file name. */
